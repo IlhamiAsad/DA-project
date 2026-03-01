@@ -1,0 +1,1460 @@
+#Set Up Dataset
+
+# Libraries
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+from sklearn.model_selection import train_test_split
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import classification_report, roc_auc_score
+
+#Data Preparing
+
+# import data from google spreadsheets
+url = "https://docs.google.com/spreadsheets/d/1eAgIR_e2WFg8VOOzdhXOKth1lLfmOKqTqZFY5is8fOw/export?format=csv&gid=965227589"
+
+df = pd.read_csv(url)
+df.head()
+
+#Analysis Data
+
+##Category-level performance
+
+df.info()
+
+# make a copy
+df_copy = df.copy()
+
+# Clean price & grand_total
+# Remove '$' symbol
+df['price'] = df['price'].str.replace('$', '', regex=False)
+df['grand_total'] = df['grand_total'].str.replace('$', '', regex=False)
+
+# Remove thousands separator '.' and replace decimal separator ',' with '.'
+df['price'] = df['price'].str.replace('.', '', regex=False).str.replace(',', '.', regex=False).astype(float)
+df['grand_total'] = df['grand_total'].str.replace('.', '', regex=False).str.replace(',', '.', regex=False).astype(float)
+
+# Clean discount
+df['discount_amount'] = (
+    df['discount_amount']
+    .str.replace('%', '')
+    .astype(float)
+)
+
+
+# status standardization
+df['status'] = df['status'].str.lower()
+
+
+category_perf = (
+    df
+    .groupby('category_name_1')
+    .agg(
+        total_orders=('item_id', 'count'),
+        completed_orders=('status', lambda x: (x == 'completed').sum()),
+        cancelled_orders=('status', lambda x: (x == 'cancelled').sum()),
+        gross_revenue=('grand_total', 'sum'),
+        net_revenue=('grand_total', lambda x: x[df.loc[x.index, 'status'] == 'completed'].sum()),
+        avg_discount=('discount_amount', 'mean')
+    )
+    .reset_index()
+)
+
+category_perf['cancellation_rate'] = (
+    category_perf['cancelled_orders'] / category_perf['total_orders']
+)
+
+category_perf['aov'] = (
+    category_perf['gross_revenue'] / category_perf['total_orders']
+)
+
+category_perf.sort_values('cancellation_rate', ascending=False)
+
+
+# visualization
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=category_perf,
+    x='category_name_1',
+    y='cancellation_rate'
+)
+plt.xticks(rotation=45)
+plt.title('Cancellation Rate by Category')
+plt.show()
+
+
+Insight:
+- Kategori yang tidak diketahui memiliki cancellation rate paling tinggi
+- kategori Books dan mobiles & tablets memiliki cancellation rate paling tinggi kedua
+- kategori fashion pria dan wanita memiliki cancellation rate kedua setelah kategori unknown
+
+##Discount Effectiveness
+
+# make a copy
+dscnt = df.copy()
+
+# make flag for discount
+df['has_discount'] = df['discount_amount'] > 0
+df['has_discount'].head()
+
+discount_perf = (
+    df
+    .groupby('has_discount')
+    .agg(
+        total_orders=('item_id', 'count'),
+        completed_orders=('status', lambda x: (x == 'completed').sum()),
+        cancelled_orders=('status', lambda x: (x == 'cancelled').sum()),
+        gross_revenue=('grand_total', 'sum'),
+        avg_order_value=('grand_total', 'mean')
+    )
+    .reset_index()
+)
+
+discount_perf['completion_rate'] = (
+    discount_perf['completed_orders'] / discount_perf['total_orders']
+)
+
+discount_perf['cancellation_rate'] = (
+    discount_perf['cancelled_orders'] / discount_perf['total_orders']
+)
+
+discount_perf
+
+
+# Visualization v2
+plt.figure(figsize=(6,4))
+sns.barplot(
+    data=discount_perf,
+    x='has_discount',
+    y='cancellation_rate'
+)
+plt.title('Cancellation Rate: Discount vs No Discount')
+plt.xlabel('Has Discount')
+plt.ylabel('Cancellation Rate')
+plt.show()
+
+
+Insight:
+- discount has effect to the cancellation rate
+
+# Gross vs Net Revenue
+revenue_quality = (
+    df
+    .assign(is_completed=df['status'] == 'completed')
+    .groupby('has_discount')
+    .agg(
+        gross_revenue=('grand_total', 'sum'),
+        net_revenue=('grand_total', lambda x: x[df.loc[x.index, 'status'] == 'completed'].sum())
+    )
+    .reset_index()
+)
+
+revenue_quality['net_ratio'] = (
+    revenue_quality['net_revenue'] / revenue_quality['gross_revenue']
+)
+
+revenue_quality
+
+
+# Proof that bigger discount = more cancellation?
+plt.figure(figsize=(7,5))
+sns.boxplot(
+    data=df[df['has_discount']],
+    x='status',
+    y='discount_amount'
+)
+plt.title('Discount Depth by Order Status')
+plt.ylabel('Discount (%)')
+plt.show()
+
+
+Insight:
+- Discounted orders show higher order volume but lower completion rate
+- High discount depth correlates with increased cancellation
+- Net revenue contribution from discounted orders is lower than GMV (Gross Merchandise Value) suggests
+
+Recommendation:
+- Limit extreme discounts (>X%) to high-risk categories
+- Apply selective discounts to high-completion categories
+- Combine discounts with non-COD payments
+
+##Payment Method Risk Analysis
+
+# make a copy for payment method
+pmnt = df.copy()
+df.head()
+
+# make the str lowecase to keep consistance
+df['payment_method'] = df['payment_method'].str.lower()
+df['status'] = df['status'].str.lower()
+
+# define the risk status
+df['is_completed'] = df['status'] == 'completed'
+df['is_cancelled'] = df['status'] == 'cancelled'
+df['is_fraud'] = df['status'] == 'fraud'
+
+# make risk of payment method rate
+payment_risk = (
+    df
+    .groupby('payment_method')
+    .agg(
+        total_orders=('item_id', 'count'),
+        completed_orders=('is_completed', 'sum'),
+        cancelled_orders=('is_cancelled', 'sum'),
+        fraud_orders=('is_fraud', 'sum'),
+        gross_revenue=('grand_total', 'sum'),
+        net_revenue=('grand_total', lambda x: x[df.loc[x.index, 'is_completed']].sum())
+    )
+    .reset_index()
+)
+
+payment_risk['completion_rate'] = payment_risk['completed_orders'] / payment_risk['total_orders']
+payment_risk['cancellation_rate'] = payment_risk['cancelled_orders'] / payment_risk['total_orders']
+payment_risk['fraud_rate'] = payment_risk['fraud_orders'] / payment_risk['total_orders']
+payment_risk['net_revenue_ratio'] = payment_risk['net_revenue'] / payment_risk['gross_revenue']
+
+payment_risk.sort_values('cancellation_rate', ascending=False)
+
+
+# Visualization
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=payment_risk.sort_values('cancellation_rate', ascending=False),
+    x='payment_method',
+    y='cancellation_rate'
+)
+plt.xticks(rotation=45)
+plt.title('Cancellation Rate by Payment Method')
+plt.ylabel('Cancellation Rate')
+plt.xlabel('Payment Method')
+plt.show()
+
+
+Insight:
+- Credit card menjadi peyment method yang paling sering di cancel oleh customer
+
+# Visualization net revenue quality
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=payment_risk.sort_values('net_revenue_ratio'),
+    x='payment_method',
+    y='net_revenue_ratio'
+)
+plt.xticks(rotation=45)
+plt.title('Net Revenue Ratio by Payment Method')
+plt.ylabel('Net / Gross Revenue')
+plt.xlabel('Payment Method')
+plt.show()
+
+
+Insight:
+- karna cancelation paling rendah, payment method yang menggunakan promo menjadi revenue paling tinggi
+- walaupun promo yang paling tinggi dalam hal GMV (Gross Merchandise Value) tapi dalam hal real Revenue tetap rendah
+
+# Risk Scoring Model
+payment_risk['risk_score'] = (
+    payment_risk['cancellation_rate'] * 0.5 +
+    payment_risk['fraud_rate'] * 0.3 +
+    (1 - payment_risk['net_revenue_ratio']) * 0.2
+)
+
+payment_risk.sort_values('risk_score', ascending=False)
+
+
+# make segmentation of risk (Low, Medium, High)
+payment_risk['risk_level'] = pd.qcut(
+    payment_risk['risk_score'],
+    q=3,
+    labels=['Low Risk', 'Medium Risk', 'High Risk']
+)
+
+payment_risk[['payment_method', 'risk_score', 'risk_level']]
+
+
+Insight:
+- Credit Card menjadi metode pembayar yang paling risk untuk dilakukan
+- sementara Promo yang paling rendah risk nya dalam hal metode pembayaran
+
+Recommendation
+- atasi promo untuk high-risk payment methods
+- Dorong pre-paid methods untuk kategori high-value
+- Tambahkan verification untuk COD high-ticket orders
+
+##Gross Revenue vs Net (Real) Revenue per payment method
+
+# make a copy
+pmnt_copy = pmnt.copy()
+df_copy
+
+# clean format currency to make it clear
+df['grand_total'] = (
+    df['grand_total']
+    .astype(str)
+    .str.replace('[\$,]', '', regex=True)
+    .astype(float)
+)
+
+
+# make net revenue = just completed transaction
+df['net_revenue'] = np.where(
+    df['status'].str.lower() == 'completed',
+    df['grand_total'],
+    0
+)
+
+# payment revenue real money not just a rate
+payment_revenue = (
+    df
+    .groupby('payment_method')
+    .agg(
+        gross_revenue=('grand_total', 'sum'),
+        net_revenue=('net_revenue', 'sum'),
+        total_orders=('item_id', 'count')
+    )
+    .reset_index()
+)
+
+payment_revenue['revenue_leakage'] = (
+    payment_revenue['gross_revenue'] - payment_revenue['net_revenue']
+)
+
+payment_revenue.sort_values('net_revenue', ascending=False)
+
+
+# Visualization of payment revenue
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=payment_revenue.sort_values('net_revenue', ascending=False),
+    x='payment_method',
+    y='net_revenue'
+)
+
+plt.title('Net (Real) Revenue by Payment Method')
+plt.xlabel('Payment Method')
+plt.ylabel('Net Revenue')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+Insight:
+- e-wallet yang paling menguntungkan dibanding semuanya
+- sedangkan dari penjelasan sebelumnya terkait GMV promo yang paling tinggi, secara pendapatan real, promo termasuk rendah berdasarkan net revenue dari payment methode
+
+# visualization Gross vs Net Revenue
+payment_revenue_melted = payment_revenue.melt(
+    id_vars='payment_method',
+    value_vars=['gross_revenue', 'net_revenue'],
+    var_name='revenue_type',
+    value_name='amount'
+)
+
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=payment_revenue_melted,
+    x='payment_method',
+    y='amount',
+    hue='revenue_type'
+)
+
+plt.title('Gross vs Net Revenue by Payment Method')
+plt.xlabel('Payment Method')
+plt.ylabel('Revenue')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- gap keuntungan yang sangat besar, menandakan kerugian untuk bisnis (inefficiency tinggi)
+- jika dilihat dari bar, payment gateway yang paling merugi karna jarak antara gross_revenue dan net_revenue, cukup jauh.
+
+# Visualization Revenue Leakage (kerugian real)
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=payment_revenue.sort_values('revenue_leakage', ascending=False),
+    x='payment_method',
+    y='revenue_leakage'
+)
+
+plt.title('Revenue Leakage by Payment Method')
+plt.xlabel('Payment Method')
+plt.ylabel('Lost Revenue')
+plt.xticks(rotation=45)
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- kerugian yang paling besar ada pada payment method (payment_gateway)
+
+Summary:
+- Net revenue is a more accurate profitability indicator than GMV
+- Some payment methods inflate GMV but destroy value
+- Strategic focus should prioritize high net revenue contributors
+
+For presentation:
+- "While COD generates high gross revenue, its net revenue contribution is significantly lower due to cancellations, resulting in substantial revenue leakage".
+
+##Customer Behavior
+
+# make a copy
+cust = df.copy()
+cust.head()
+
+# clean currency
+df['grand_total'] = (
+    df['grand_total']
+    .astype(str)
+    .str.replace('[\$,]', '', regex=True)
+    .astype(float)
+)
+
+# standardization status
+df['status_clean'] = df['status'].str.lower()
+
+# make net revenue
+df['net_revenue'] = np.where(
+    df['status_clean'] == 'completed',
+    df['grand_total'],
+    0
+)
+
+# make customer purchase behavior
+customer_behavior = (
+    df
+    .groupby('Customer ID')
+    .agg(
+        total_orders=('item_id', 'count'),
+        completed_orders=('status_clean', lambda x: (x=='completed').sum()),
+        total_spent=('grand_total', 'sum'),
+        net_revenue=('net_revenue', 'sum')
+    )
+    .reset_index()
+)
+
+customer_behavior['completion_rate'] = (
+    customer_behavior['completed_orders'] /
+    customer_behavior['total_orders']
+)
+customer_behavior.head()
+
+# Visualization for order frequency distribution
+plt.figure(figsize=(8,5))
+sns.histplot(customer_behavior['total_orders'], bins=20)
+
+plt.title('Customer Order Frequency Distribution')
+plt.xlabel('Number of Orders')
+plt.ylabel('Number of Customers')
+
+for value in customer_behavior['total_orders'].value_counts().head(5).index:
+    plt.text(value, 0, value, ha='center')
+
+plt.tight_layout()
+plt.show()
+
+
+# Visualization of top customer (net revenue)
+top_customers = customer_behavior.sort_values(
+    'net_revenue', ascending=False
+).head(10)
+
+plt.figure(figsize=(10,5))
+sns.barplot(
+    data=top_customers,
+    x='Customer ID',
+    y='net_revenue'
+)
+
+plt.title('Top 10 Customers by Net Revenue')
+plt.xlabel('Customer ID')
+plt.ylabel('Net Revenue')
+
+for index, row in top_customers.iterrows():
+    plt.text(
+        top_customers.index.get_loc(index),
+        row['net_revenue'],
+        f"{row['net_revenue']:,.0f}",
+        ha='center',
+        va='bottom'
+    )
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- penyebaran tidak merata ke setiap customer, karna perbedaan harga dari setiap kategori
+
+# completion rate vs spending (behavior quality)
+plt.figure(figsize=(8,6))
+sns.scatterplot(
+    data=customer_behavior,
+    x='completion_rate',
+    y='net_revenue',
+    size='total_orders',
+    legend=False
+)
+
+plt.title('Customer Behavior: Completion Rate vs Net Revenue')
+plt.xlabel('Order Completion Rate')
+plt.ylabel('Net Revenue')
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- High completion + High revenue → Best customers
+- Low completion + High revenue → Risky customers
+- High completion + Low revenue → Loyal but low value
+- Low completion + Low revenue → Low priority
+
+# Customer Segmentation (High value, High Risk, Reguler)
+def segment_customer(row):
+    if row['completion_rate'] >= 0.8 and row['net_revenue'] > customer_behavior['net_revenue'].median():
+        return 'High Value'
+    elif row['completion_rate'] < 0.5:
+        return 'High Risk'
+    else:
+        return 'Regular'
+
+customer_behavior['segment'] = customer_behavior.apply(segment_customer, axis=1)
+customer_behavior.head()
+
+
+# Visualization for Segmentation
+plt.figure(figsize=(7,5))
+sns.countplot(
+    data=customer_behavior,
+    x='segment'
+)
+
+plt.title('Customer Segmentation')
+plt.xlabel('Customer Segment')
+plt.ylabel('Number of Customers')
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- Dominate by High Risk Customer that have a low completion rate or unstable transaction behavior.
+- Regular customer have possibility to be upgrade as High Value customer.
+
+Recommendation:
+- Protect High Value Customers (Top Priority)
+- Convert Regular → High Value (Quick Win)
+- Contain High Risk Customers (Cost Control), action: Limitation for COD, Require prepayment untuk some categories, Fraud & cancellation threshold. The focus is not on full conversion, but on reducing losses and operational costs.
+
+##K-means clustering
+
+# preparing data
+from sklearn.preprocessing import MinMaxScaler, MaxAbsScaler, StandardScaler, RobustScaler # for feature scaling
+from sklearn.cluster import KMeans # K-means clustering
+from yellowbrick.cluster import SilhouetteVisualizer # u/ melakukan analisis siluet untuk k-means clustering
+
+# make a copy
+kmean = df.copy()
+df.head()
+
+kmean.describe()
+
+kmean.info()
+
+# fix customer_id and item_id data type to string
+kmean['Customer ID'] = kmean['Customer ID'].astype(str)
+kmean['item_id'] = kmean['item_id'].astype(str)
+kmean.info()
+
+kmean.describe()
+
+# make a copy, just for numeric data
+df_num = kmean.select_dtypes(include='number')
+df_num.head()
+
+###EDA
+
+####Scatter Plot
+
+# quantity vs grand_total
+plt.figure()
+plt.scatter(df_num['qty_ordered'], df_num['grand_total'], alpha=0.5)
+plt.xlabel('Quantity Ordered')
+plt.ylabel('Grand Total')
+plt.title('Quantity Ordered vs Grand Total')
+plt.show()
+
+
+# discount vs grand_total
+plt.figure()
+plt.scatter(df_num['discount_amount'], df_num['grand_total'], alpha=0.5)
+plt.xlabel('Discount Amount')
+plt.ylabel('Grand Total')
+plt.title('Discount Amount vs Grand Total')
+plt.show()
+
+# discount vs net_revenue
+plt.figure()
+plt.scatter(df_num['discount_amount'], df_num['net_revenue'], alpha=0.5)
+plt.xlabel('Discount Amount')
+plt.ylabel('Net Revenue')
+plt.title('Discount Amount vs Net Revenue')
+plt.show()
+
+
+# quantity vs net_revenue
+plt.figure()
+plt.scatter(df_num['qty_ordered'], df_num['net_revenue'], alpha=0.5)
+plt.xlabel('Quantity Ordered')
+plt.ylabel('Net Revenue')
+plt.title('Quantity Ordered vs Net Revenue')
+plt.show()
+
+
+# log scale for outlier
+plt.figure()
+plt.scatter(
+    np.log1p(df_num['discount_amount']),
+    np.log1p(df_num['net_revenue']),
+    alpha=0.5
+)
+plt.xlabel('Log Discount Amount')
+plt.ylabel('Log Net Revenue')
+plt.title('Log Discount vs Log Net Revenue')
+plt.show()
+
+
+####Min-Max Scaler
+untuk membandingkan nilai antar kolom dengan setara, membersihakn efek skala, bukan makna
+
+# data original
+df_num.head()
+
+MinMaxScaler().fit_transform(df_num)
+
+# get the object first and put it in variable if needed
+minmax = MinMaxScaler()
+# call the variable and use .fit_transform() function, put our data in the input
+minmax_result = minmax.fit_transform(df_num)
+minmax_result
+
+# if we want to put it as dataframe, can use "pd.DataFrame()"
+df_minmax = pd.DataFrame(minmax_result)
+df_minmax
+
+# if we want to put it as dataframe, can use "pd.DataFrame()", then specify columns similiar to "kmeans"
+df_minmax = pd.DataFrame(minmax_result, columns=df_num.columns)
+df_minmax
+
+df_minmax.describe()
+
+####Standard Scaler
+ketika data yang terdistribusi normal dan minim outlier
+
+# do the same thing like min max scaler for standarscaler()
+std_scaler = StandardScaler()
+df_std = pd.DataFrame(std_scaler.fit_transform(df_num), columns=df_num.columns)
+df_std
+
+df_std.describe()
+
+# set option for float display, to show 4 numbers after decimal
+pd.set_option('display.float_format', '{:.4f}'.format)
+
+df_std.describe()
+
+####Robust Scaler
+digunakan ketika banyak outlier, distribusi data sangant skewed, sama seperti MinMax scaler tetapi menggunakan  Q1 dan Q3. Jadi, di Q1 akan bernilai 0, dan Q3 bernilai 1. Sisanya disesuaikan dengan scalenya. Di bawah Q1 akan bernilai negatif, di atas Q3 bernilai >1.
+
+# o the same thing like min max scaler for RobustScaler()
+robust_scaler = RobustScaler()
+df_robust = pd.DataFrame(robust_scaler.fit_transform(df_num), columns=df_num.columns)
+df_robust
+
+df_robust.describe()
+
+###K-Means Initial Approach
+
+# data final untuk di cluster
+df_minmax.head()
+
+####Training the Model
+
+# initial kmeans for 3 clusters and random_state=42 (see appendix about random state)
+cluster_model = KMeans(n_clusters=3, random_state=42, n_init='auto')
+cluster_model
+
+# call the model variable, use .fit() function and use "df_minmax" as input
+cluster_model.fit(df_minmax)
+
+# untuk melihat intertia dari model kita, panggil modelnya lalu gunakan ".intertia_"
+cluster_model.inertia_
+
+####Get the Cluster Label
+
+# check up cluster label created by the Kmeans, panggil modelnya lalu pakai ".labels_"
+cluster_model.labels_
+
+df_result = df.copy()
+df_result['cluster'] = cluster_model.labels_
+df_result
+
+# coba lihat banyak orang tiap cluster
+df_result['cluster'].value_counts()
+
+Insight:
+“The clustering result shows a dominant cluster representing the majority of normal transactions, while two significantly smaller clusters capture high-value and atypical transaction behaviors. This indicates that most customers exhibit similar purchasing patterns, with a small subset contributing disproportionately different characteristics.”
+
+# check untuk salah satu cluster terbentuk
+df_result[df_result['cluster'] == 2]
+
+#####Opsi 1
+
+import plotly.express as px
+
+fig = px.scatter_3d(
+    df_result,
+    x='grand_total',
+    y='discount_amount',
+    z='net_revenue',
+    color='cluster',
+    size='qty_ordered',
+    opacity=0.6
+)
+fig.show()
+
+#####Opsi 2
+
+# Select data, then select x-axis, y-axis, z-axis, and its hue (if any)
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['price', 'qty_ordered', 'grand_total'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['grand_total', 'discount_amount', 'net_revenue'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['price', 'discount_amount', 'net_revenue'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+####Determining Number of Cluster
+
+##### Elbow Method
+
+# get the inertia
+cluster_model.inertia_
+
+# create empty list to store the inertia value for each K later
+inertia_values = []
+K_range = range(2, 15)
+
+for K in K_range:
+    # create the model
+    cluster_model = KMeans(n_clusters=K, random_state=42, n_init='auto')
+    # Train them using "df_minmax" data (our final data scaled by min max scaler)
+    cluster_model.fit(df_minmax)
+    # get the intertia value and put it our empty list "inertia_values"
+    inertia_values.append(cluster_model.inertia_)
+
+# print output
+print(inertia_values)
+
+# define canvas
+plt.figure(figsize=(13,4))
+
+# plot the lineplot using matplotib
+# x-axis -> K_range, y-axis -> intertia
+# "b*-" in the third parameter to do styling (b: blue, *: star mark each point, -: connect by line)
+plt.plot(K_range, inertia_values, 'b*-')
+plt.xlabel('Number of Clusters (K)')
+plt.ylabel('Inertia')
+plt.title('Elbow Method')
+
+
+##### Silhoutte Method
+
+# make a sample, bcs data is to big
+df_minmaxs = df_minmax.sample(n=5000, random_state=42)
+
+# mengurangi fitur redundant
+x = df_minmaxs[["qty_ordered", "net_revenue", "discount_amount"]]
+
+# Let's rerun the cluster modeling for K=3 for illustration
+cluster_model = KMeans(n_clusters=3, random_state=42, n_init='auto')
+cluster_model.fit(df_minmaxs)
+
+# Since our model is already fitted, we use "is_fitted=True"
+sil = SilhouetteVisualizer(cluster_model, is_fitted=True)
+
+# "Fit" here is to generate the silhouette visualization
+sil.fit(df_minmaxs)
+
+# Give labels and titles for the visualization
+sil.finalize()
+
+# In "sil" variable we created, we can use ".silhouette_score_" to get the AVG silhouette score of all data
+print("Silhouette Score:", sil.silhouette_score_)
+
+Insight:
+  "cluster pertama mendominasi, karna lebih banyak dari customer yang memiliki behaviour yang mirip. sehingga cluster 2 kedua dan ketiga berhimpitan".
+
+# Kita akan show tiap visualisasi lewat subplot dengan 2 kolom dan N baris
+# N menyesuaikan berapa banyak range K yang kita pilih.
+# Misal K-nya 11 biji, kita bikin subplots 6x2
+# Kalau K-nya 12, maka bikin subplots tetep 6x2. (Rumusnya banyak K dibagi 2, lalu dibulatkan ke atas)
+
+# Lakukan hal yang sama untuk setiap K_range 2-10
+K_range = range(2,15)
+
+# Hitung banyak K yang akan diplot
+banyak_K = len(K_range)
+# Dibagi 2 dan dibulatkan ke atas pakai np.ceil() -- (jangan lupa ubah ke int)
+n_baris = int(np.ceil(banyak_K/2))
+
+# Define canvasnya
+fig, ax = plt.subplots(n_baris, 2, figsize=(15,30))
+
+# Karena kita akan show masing-masing plot di ax bersesuaian di subplot, kita harus tau indexnya
+# Kita bisa pakai function enumerate() untuk ambil index dan elemen dari sequence tiap iterasi (see Appendix)
+for index, K in enumerate(K_range):
+  kmeanModel = KMeans(n_clusters=K, random_state=42, n_init='auto')
+
+  # Untuk memasukkan tiap chart ke indexnya di subplot, kita mending .flatten()-kan dulu ax-nya
+  # Sehingga indexnya akan berupa bilangan terurut (liat appendix)
+  sil = SilhouetteVisualizer(kmeanModel, is_fitted=False, ax=ax.flatten()[index])
+  sil.fit(df_minmaxs)
+  sil.finalize()
+  print(f"For k={K}, the average silhouette score is {sil.silhouette_score_}")
+
+insight:
+  "Although K=2 and K=3 yield the highest silhouette scores, these configurations produce overly coarse clusters that lack business interpretability.
+  Based on the elbow point around K=5 or 6 and stable silhouette scores within this range, we selected K=6 as the optimal balance between cluster quality and actionable segmentation".
+
+
+####Rerun the cluster using Prefered "k" and interpret Them
+
+# Rerun using K=6
+cluster_model = KMeans(n_clusters=6, random_state=42, n_init='auto')
+cluster_model.fit(df_minmax)
+
+# copy the original dataframe to "df_result" and put the cluster label there
+df_result = df.copy()
+df_result['cluster'] = cluster_model.labels_
+df_result
+
+#####Opsi 1 (tidak cocok untuk 3d)
+
+import plotly.express as px
+
+fig = px.scatter_3d(
+    df_result,
+    x='grand_total',
+    y='discount_amount',
+    z='net_revenue',
+    color='cluster',
+    size='qty_ordered',
+    opacity=0.6
+)
+fig
+
+insight: tidak keliatan, lebih cocok di 2d
+
+#####Opsi 2
+
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['price', 'qty_ordered', 'grand_total'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['grand_total', 'discount_amount', 'net_revenue'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+fig = px.scatter_matrix(
+    df_result,
+    dimensions=['price', 'discount_amount', 'net_revenue'],
+    color='cluster',
+    opacity=0.6
+)
+fig.show()
+
+# lets try to do grouping by the cluster created
+df_result.groupby('cluster').agg({
+    'price' : ['count', 'median'],
+    'net_revenue' : 'mean',
+    'discount_amount' : 'mean',
+    'grand_total' : 'mean'
+})
+
+# Bisa juga melakukan boxplot
+
+# Ambil banyak kolom dari data kita
+n_baris = len(df.columns)
+
+# Buat canvas subplot dengan 1 kolom dan N baris sebanyak kolom numerik
+fig, axes = plt.subplots(n_baris, 1, figsize=(10,8))
+
+for i, nama_kol in enumerate(df.columns):
+  # Show boxplot bisa pakai library Seaborn, pilih datanya, x-axis, y-axis, axes, dan showmeans kalo mau show meannya
+  sns.boxplot(df_result, x='cluster', y=nama_kol, ax=axes.flatten()[i], showmeans=True)
+
+plt.tight_layout()
+plt.show()
+
+hasil berhimpitan karna terlalu banyak, jadi perlu perbaikan
+
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+n_plots = len(df.columns)
+
+fig, axes = plt.subplots(
+    n_plots,
+    1,
+    figsize=(12, 4 * n_plots),  # tinggi dinamis
+    sharex=True
+)
+
+for i, col in enumerate(df.columns):
+    sns.boxplot(
+        data=df_result,
+        x='cluster',
+        y=col,
+        ax=axes[i],
+        showmeans=True
+    )
+    axes[i].set_title(f'{col} Distribution by Cluster')
+    axes[i].set_xlabel('Cluster')
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+(grand total)
+- Cluster 1: The Refund/Anomaly. karakteristik: transaski dengan rate pembatalan, retur, tertinggi. aksi: audit data untuk tidak ada eror sistem.
+- Cluster 2: Standard Shopper. Karakteristik: pembeli ritel biasa. membeli barang dengan harga wajar tpi dalam jumlah sedikit. Aksi: berikan promo cross selling untuk menaikkan grand total
+- Cluster 3: The budget/Inactive. Karakteristik: Pembeli barang murah/promo dalam jumlah sedikit. Aksi: Re-aktivasi melalui kupon belanja atau campaign "Flash Sale".
+- Cluster 4: The Whale. Karakteristik: penyokong utama revenue, membeli dengan harga murah, tapi dalam jumlah masif. Aksi: berikan layanan khusus, harga grosir dan logistik prioritas
+- Cluster 5: The Luxury Collector. Karakteristik: pembeli barang premium/mewah. Aksi: Fokus pada customer experience, kemasan eksklusif, dan program loyalitas VIP.
+- Cluster 6: The Steeady Bulk. Karakteristik: pembeli rutin dengan volume konsisten, lebih stabil dan rendah resiko dibanding culster 4. Aksi: jaga stok favorit mereka agar selalu tersedia (stock availability).
+
+
+
+###Order Funnel
+
+# make a copy
+of = df.copy()
+of
+
+# check
+df.info()
+
+# Convert datetime
+df['created_at'] = pd.to_datetime(df['created_at'], dayfirst=True)
+
+# make sure for numeric
+num_cols = ['price', 'qty_ordered', 'grand_total', 'discount_amount']
+df[num_cols] = df[num_cols].apply(pd.to_numeric, errors='coerce')
+
+# Define funnel stage
+def map_funnel_stage(row):
+    if row['status'] == 'cancelled':
+        return 'Cancelled'
+    elif row['BI Status'] == 'Gross':
+        return 'Gross Order'
+    elif row['BI Status'] == 'Valid':
+        return 'Valid Order'
+    elif row['BI Status'] == 'Net':
+        return 'Net Revenue'
+    else:
+        return 'Others'
+
+df['funnel_stage'] = df.apply(map_funnel_stage, axis=1)
+
+
+funnel_count = (
+    df.groupby('funnel_stage')
+      .agg(
+          orders=('item_id', 'count'),
+          revenue=('grand_total', 'sum')
+      )
+      .reset_index()
+      .sort_values('orders', ascending=False)
+)
+
+funnel_count
+
+# visualization
+plt.figure(figsize=(8,5))
+plt.barh(funnel_count['funnel_stage'], funnel_count['orders'])
+plt.xlabel('Number of Orders')
+plt.title('Order Funnel Analysis')
+plt.gca().invert_yaxis()
+plt.show()
+
+Insight:
+- Although order volume is high, the funnel shows significant leakage, particularly driven by cancellations.
+- The largest drop occurs before validation, indicating potential issues in payment, fraud checks, or checkout experience.
+- inconsistencies in funnel definitions suggest the need for metric standardization before strategic decisions are made. (Net Revenue order > Valid Order, Cancelled malah paling besar dan diposisikan setara stage lain).
+
+# Revenue Leakage
+revenue_by_stage = (
+    df.groupby('funnel_stage')['grand_total']
+      .sum()
+      .reset_index()
+)
+
+revenue_by_stage
+
+# Visualization with label
+plt.figure(figsize=(8,5))
+bars = plt.barh(revenue_by_stage['funnel_stage'], revenue_by_stage['grand_total'])
+plt.xlabel('Total Revenue')
+plt.title('Revenue by Funnel Stage')
+plt.gca().invert_yaxis()
+
+def format_billion(x):
+    return f'{x/1e9:.2f}B'
+
+for bar in bars:
+    width = bar.get_width()
+    plt.text(
+        width,
+        bar.get_y() + bar.get_height() / 2,
+        format_billion(width),
+        va='center',
+        ha='left',
+        fontsize=10
+    )
+
+plt.tight_layout()
+plt.show()
+
+Insight:
+- Order banyak masuk, namun banyak yang gagal (cancelled) jadi transaski akhir.
+- banyak yang gugur ditahap validasi, mungkin karana stok, sistem pembayaran, fraud check atau user behaviour.
+- Funnel tidak bocor di awal, namun di tengah-akhir, itu memberikan dampak biaya operational tinggi, overestimasi demand.
+- seharusnya funnel terdiri dari: Gross ≥ Valid ≥ Net. yang artinya funnel diatas tidak wajar.
+
+# cancellation rate
+total_orders = len(df)
+cancelled_orders = df[df['funnel_stage'] == 'Cancelled'].shape[0]
+
+cancellation_rate = cancelled_orders / total_orders
+cancellation_rate
+
+# category - level funnel insight
+category_funnel = (
+    df.groupby(['category_name_1', 'funnel_stage'])
+      .agg(
+          orders=('item_id', 'count'),
+          revenue=('grand_total', 'sum')
+      )
+      .reset_index()
+)
+
+category_funnel
+
+###Time-Based Trend Analysis
+
+# make a copy
+df_time = df.copy()
+
+# make sure for datetime
+df['created_at'] = pd.to_datetime(df['created_at'])
+
+# buat kolom bulan
+df['order_month'] = df['created_at'].dt.to_period('M').astype(str)
+
+
+# visualization
+orders_trend = (
+    df.groupby('order_month')
+      .size()
+      .reset_index(name='total_orders')
+)
+
+plt.figure(figsize=(10,5))
+plt.plot(orders_trend['order_month'], orders_trend['total_orders'], marker='o')
+plt.title('Monthly Order Volume Trend')
+plt.xlabel('Month')
+plt.ylabel('Number of Orders')
+plt.xticks(rotation=45)
+
+# label
+for x, y in zip(orders_trend['order_month'], orders_trend['total_orders']):
+    plt.text(x, y, f'{y:,}', ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- terjadi lonjakan order yang besar pada bulan 11 di tahun 2016 dan 2017, namun di tahun 2018, jumlah orderan stagnan seperti bulan-bulan sebelumnya
+
+# gross vs net revenue trend
+revenue_trend = (
+    df.groupby(['order_month', 'BI Status'])['grand_total']
+      .sum()
+      .reset_index()
+)
+
+pivot_revenue = revenue_trend.pivot(
+    index='order_month',
+    columns='BI Status',
+    values='grand_total'
+).fillna(0)
+
+plt.figure(figsize=(10,5))
+plt.plot(pivot_revenue.index, pivot_revenue.get('Gross', 0), label='Gross Revenue')
+plt.plot(pivot_revenue.index, pivot_revenue.get('Net', 0), label='Net Revenue')
+
+plt.title('Monthly Gross vs Net Revenue Trend')
+plt.xlabel('Month')
+plt.ylabel('Total Revenue')
+plt.xticks(rotation=45)
+plt.legend()
+
+# label Net Revenue (lebih relevan)
+for x, y in zip(pivot_revenue.index, pivot_revenue.get('Net', [])):
+    plt.text(x, y, f'{int(y):,}', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- selama tahun 2016, 2017, dan 2018, net revenue tidak bisa mengimbangi bahkan melewati gross revenue, artinya perusahaan merugi.
+- terjadi kerugian besar pada tahun 2017 di bulan ke 6 dan ke 7.
+
+# cancellation rate trend
+monthly_status = (
+    df.groupby(['order_month', 'status'])
+      .size()
+      .reset_index(name='orders')
+)
+
+pivot_status = monthly_status.pivot(
+    index='order_month',
+    columns='status',
+    values='orders'
+).fillna(0)
+
+pivot_status['total_orders'] = pivot_status.sum(axis=1)
+pivot_status['cancellation_rate'] = (
+    pivot_status.get('cancelled', 0) / pivot_status['total_orders']
+) * 100
+
+plt.figure(figsize=(10,5))
+plt.plot(pivot_status.index, pivot_status['cancellation_rate'], marker='o', color='red')
+plt.title('Monthly Cancellation Rate Trend')
+plt.xlabel('Month')
+plt.ylabel('Cancellation Rate (%)')
+plt.xticks(rotation=45)
+
+# label
+for x, y in zip(pivot_status.index, pivot_status['cancellation_rate']):
+    plt.text(x, y, f'{y:.1f}%', ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- Cancellation rate naik secara konsisten dari kisaran 34–40% (2016) menjadi 48–55% (2018).
+- Semakin banyak order yang masuk, tetapi semakin sedikit yang benar-benar selesai → pertumbuhan volume tidak berkualitas.
+- Sejak pertengahan 2017 hingga akhir 2018, hampir semua bulan berada di atas 45%, tidak dalam kondisi sehat.
+- Setelah spike, cancellation tidak kembali ke baseline lama, melainkan menetap di level tinggi, menandakan ada kemungkinan event atau perubahan sistem (pricing, promo, payment, fulfillment) yang meninggalkan long-term damage pada funnel.
+
+# Average order value
+aov_trend = (
+    df.groupby('order_month')
+      .agg(
+          total_revenue=('grand_total', 'sum'),
+          total_orders=('item_id', 'count')
+      )
+      .reset_index()
+)
+
+aov_trend['AOV'] = aov_trend['total_revenue'] / aov_trend['total_orders']
+
+plt.figure(figsize=(10,5))
+plt.plot(aov_trend['order_month'], aov_trend['AOV'], marker='o')
+plt.title('Average Order Value (AOV) Trend')
+plt.xlabel('Month')
+plt.ylabel('AOV')
+plt.xticks(rotation=45)
+
+# label
+for x, y in zip(aov_trend['order_month'], aov_trend['AOV']):
+    plt.text(x, y, f'{y:,.0f}', ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- terjadi lonjakan extream, ~ 692k (2017-7) sangat jauh dari pola normal, menandakan perilaku tidak digerakkan oleh perilaku mayoritas pelanggan, tetapi oleh sedikit transaksi yang bernilai tinggi.
+- AOV (avarage order value) tinggi berasal dari order yang berakhir pada cacenllation.
+- oder count tinggi -> cancellation tinggi = AOV fluktiatif, menandakan platform mengalami low quality growth, tetapi value tidak stabil dan tidak berkelanjutan.
+
+# Discount Dependency Trend (Optional tapi Kuat)
+discount_trend = (
+    df.groupby('order_month')
+      .agg(
+          total_discount=('discount_amount', 'sum'),
+          gross_revenue=('grand_total', 'sum')
+      )
+      .reset_index()
+)
+
+discount_trend['discount_ratio'] = (
+    discount_trend['total_discount'] / discount_trend['gross_revenue']
+) * 100
+
+plt.figure(figsize=(10,5))
+plt.plot(discount_trend['order_month'], discount_trend['discount_ratio'], marker='o')
+plt.title('Monthly Discount Dependency')
+plt.xlabel('Month')
+plt.ylabel('Discount Ratio (%)')
+plt.xticks(rotation=45)
+
+for x, y in zip(discount_trend['order_month'], discount_trend['discount_ratio']):
+    plt.text(x, y, f'{y:.1f}%', ha='center', va='bottom', fontsize=8)
+
+plt.tight_layout()
+plt.show()
+
+
+Insight:
+- karna, ini merupakan data e-commerce 1 negara (pakistan), ada beberapa perusahaan yang memberikan diskon yang besar-besaran pada 2016 akhir dan 2017 awal dan menjadikannya fluktiaktif hingga >40.000% (ekstrem) di puncak 2017. artinya Diskon tidak diterapkan sebagai strategi terstruktur, melainkan sporadis dan tidak konsisten.
+- AOV spike -> cancellation rate tinggi = net revenue tidak naik proporsional, artinya mengindikasikan promo - driven but low quality transactions
+- diskon ratio mengalami penurunan ditahun 2018 dari ~1000% - ~5000%
+- revenue sangat sensitif terhadap diskon, tanpa diskon -> diskon rendah, dengan diskon -> volume naik namun kualitas turun. artinya platform berpotensi mengorbankan margin demi volume semu.
+
+## Cancellation
+
+
+# Hitung jumlah order per status
+status_counts = df['status'].value_counts()
+
+# Ambil masing-masing status
+cancelled = status_counts.get('cancelled', 0)
+completed = status_counts.get('completed', 0)
+pending = status_counts.get('pending', 0)
+
+# Hitung cancellation rate
+cancellation_rate = cancelled / (cancelled + completed + pending)
+
+print(f"Overall Cancellation Rate: {cancellation_rate:.2%}")
+
+
+## Revenue Leakage by percentage
+
+# hitung gross revenue
+gross_revenue = df['grand_total'].sum()
+
+net_revenue = df.loc[
+    df['status'] == 'completed',
+    'grand_total'
+].sum()
+
+
+# hitung reveneu leakage
+revenue_leakage_value = gross_revenue - net_revenue
+
+
+# revenue leakage rate by percentage
+revenue_leakage_rate = revenue_leakage_value / gross_revenue
+
+print(f"Revenue Leakage Value: {revenue_leakage_value:,.0f}")
+print(f"Revenue Leakage Rate: {revenue_leakage_rate:.2%}")
+
+
+df[df['status'] == 'cancelled']['grand_total'].describe()
+
+
+leakage_by_status = (
+    df.groupby('status')['grand_total']
+    .sum()
+    .reset_index()
+)
+
+
+## Logistic Regression
+
+# make a copy
+lr = df.copy()
+lr
+
+# chose the status for binary classification problem
+lr['is_cancelled'] = np.where(
+    lr['status'] == 'cancelled', 1, 0
+)
+
+
+# discount flag
+lr['has_discount'] = np.where(
+    lr['discount_amount'] > 0, 1, 0
+)
+
+
+# extract month
+lr['order_month'] = pd.to_datetime(lr['created_at']).dt.month
+
+
+# select for feature
+features = [
+    'qty_ordered',
+    'price',
+    'grand_total',
+    'discount_amount',
+    'has_discount',
+    'order_month'
+]
+
+
+df_encoded = pd.get_dummies(
+    lr[features + ['category_name_1', 'payment_method']],
+    drop_first=True
+)
+
+
+X = df_encoded
+y = lr['is_cancelled']
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X, y, test_size=0.2, random_state=42, stratify=y
+)
+
+
+# use min max for training model
+scaler = MinMaxScaler()
+
+X_train_scaled = scaler.fit_transform(X_train)
+X_test_scaled = scaler.transform(X_test)
+
+
+# train model logistic regression
+model = LogisticRegression(max_iter=1000)
+model.fit(X_train_scaled, y_train)
+
+
+# evaluasi model
+y_pred = model.predict(X_test_scaled)
+y_prob = model.predict_proba(X_test_scaled)[:,1]
+
+print(classification_report(y_test, y_pred))
+print("ROC AUC:", roc_auc_score(y_test, y_prob))
+
+
+Insight:
+- ROC AUC > 0.7 acceptable
+- fokus probability, bukan accuracy
+
+# predict cancellation probability
+lr['cancel_prob'] = model.predict_proba(
+    scaler.transform(df_encoded)
+)[:,1]
+
+
+# calculate expected revenue loss
+lr['expected_loss'] = (
+    lr['cancel_prob'] * lr['grand_total']
+)
+
+
+# aggregate monthly
+monthly_impact = (
+    lr
+    .groupby('order_month')
+    .agg(
+        gross_revenue=('grand_total', 'sum'),
+        expected_loss=('expected_loss', 'sum')
+    )
+    .reset_index()
+)
+
+monthly_impact['expected_net_revenue'] = (
+    monthly_impact['gross_revenue'] - monthly_impact['expected_loss']
+)
+
+
+# simulation project for 6 months ahead
+# Monthly Average
+avg_gross = monthly_impact['gross_revenue'].mean()
+avg_loss_rate = (
+    monthly_impact['expected_loss'].sum() /
+    monthly_impact['gross_revenue'].sum()
+)
+
+
+# simulation for 6 months
+projection = pd.DataFrame({
+    'month_ahead': range(1, 7),
+    'projected_gross_revenue': avg_gross,
+    'projected_cancellation_rate': avg_loss_rate
+})
+
+projection['projected_net_revenue'] = (
+    projection['projected_gross_revenue'] *
+    (1 - projection['projected_cancellation_rate'])
+)
+
+
+# visualisation
+plt.figure(figsize=(8,5))
+plt.plot(projection['month_ahead'], projection['projected_gross_revenue'], label='Gross Revenue')
+plt.plot(projection['month_ahead'], projection['projected_net_revenue'], label='Net Revenue')
+plt.xlabel('Months Ahead')
+plt.ylabel('Revenue')
+plt.title('6-Month Revenue Impact Projection')
+plt.legend()
+plt.show()
+
+
+## Recomendation Financial Estimation
+
+# make a copy
+df = df.copy()
+df.head()
+
+# Total Gross Revenue
+total_gross_revenue = df['grand_total'].sum()
+total_gross_revenue
+
+# Total Net Revenue
+total_net_revenue = (
+    df.loc[df['status'] == 'completed', 'grand_total'].sum()
+)
+total_net_revenue
+
+# Total Cancelled Revenue
+total_cancelled_revenue = (
+    df.loc[df['status'] == 'cancelled', 'grand_total'].sum()
+)
+total_cancelled_revenue
+
