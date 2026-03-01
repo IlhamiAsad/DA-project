@@ -1,0 +1,787 @@
+#**MILESTONE 1**
+
+
+
+# A) Business Background
+
+
+
+## Business Overview
+
+RevoBank wants to increase the frequency of credit card usage by existing customers. The Performance Management (PM) team requested an analysis based on the last six months of transaction data to understand customer behavior and identify the most valuable user segments. The bank earns a profit from the Merchant Discount Rate (MDR) of 1.5% of the transaction value, but needs to consider potential losses from fraudulent transactions. A single customer can have multiple cards, so the analysis must consider a multi-account structure.
+
+## Business Goal
+
+Generate customer segmentation to increase MDR transactions and profits.
+
+
+## Goal of Analysis
+
+Clean Card data and User data
+
+
+
+# B) Data Preparation
+
+## Import Libary
+
+# import library for data analysis
+import pandas as pd
+import numpy as np
+import matplotlib.pyplot as plt
+import seaborn as sns
+
+## Import Dataset
+
+### Card Data
+
+# import user dataset from gsheet
+gsheet_url = 'https://drive.google.com/file/d/1XWbRb5j-qvuaj3rpfhahIE0YojWfYANl/view'
+
+# Extract the file ID from the gsheet_url
+file_id = gsheet_url.split('/')[-2]
+
+# Construct the direct download URL for the CSV file
+csv_export_url = f'https://drive.google.com/uc?export=download&id={file_id}'
+
+# read to csv
+df_card = pd.read_csv(csv_export_url)
+df_card
+
+### User Data
+
+# import User Data from gdrive
+drive_url = 'https://drive.google.com/file/d/1_xFUfSyvA3jgTBELM38KYo-7H2AIEO6y/view'
+
+# Extract the file ID from the drive_url
+file_id = drive_url.split('/')[-2]
+
+# Construct the direct download URL for the CSV file
+csv_url = f'https://drive.google.com/uc?export=download&id={file_id}'
+
+#read to csv
+df_user = pd.read_csv(csv_url)
+df_user
+
+# C) Data Cleaning
+
+## Card Data
+
+# make a copy Card Data set original
+df_card_copy = df_card.copy()
+
+### Check Data Type
+
+# Check datatype for card df
+df_card.info()
+
+There is an error in the data type
+
+# Convert data type
+df_card['id'] = df_card['id'].astype(str)
+df_card['client_id'] = df_card['client_id'].astype(str)
+df_card['card_number'] = df_card['card_number'].astype(int)
+
+# Clean and convert money columns to float
+money_columns = ['credit_limit', 'amt_nonfraud_trx_L6M', 'amt_fraud_trx_L6M']
+for col in money_columns:
+    if col in df_card.columns:
+        # Replace 'Rp', '.', and then convert to numeric, coercing errors to NaN
+        df_card[col] = df_card[col].astype(str).str.replace('Rp', '', regex=False).str.replace('.', '', regex=False).astype(float)
+
+# Convert count columns to nullable integer type
+count_columns = ['count_nonfraud_trx_L6M', 'count_fraud_trx_L6M']
+for col in count_columns:
+    if col in df_card.columns:
+        # Convert to Int64 (pandas nullable integer type) to handle NaNs
+        df_card[col] = df_card[col].astype('Int64')
+
+# Convert date columns
+df_card['acct_open_date'] = pd.to_datetime(df_card['acct_open_date'], format='%m/%Y')
+df_card['expires'] = pd.to_datetime(df_card['expires'], format='%m/%Y')
+
+
+df_card.info()
+
+- Convert identifier data to string
+- Convert count data to integer
+- Money-related data to float
+- Datetime/timeseries converted to time series
+
+### Check Typo
+
+# check typo for all column string datatype from card data
+df_card['card_brand'] = df_card['card_brand'].str.strip().replace('Visa ', 'Visa').replace('Jcb', 'JCB')
+df_card['card_brand'].value_counts()
+
+replace jcb to JCB, Visa to Visa
+
+# replace typo from card_brand
+df_card['card_brand'] = df_card['card_brand'].str.strip().replace('Visa ', 'Visa').replace('Jcb', 'JCB')
+df_card['card_brand'].value_counts()
+
+### Check Irrelevant Value
+
+# Drop columns year_pin_last_changed and cvv if they exist
+columns_to_drop = ['year_pin_last_changed', 'cvv']
+for col in columns_to_drop:
+    if col in df_card.columns:
+        df_card.drop(col, axis=1, inplace=True)
+
+remove the last year column to change the PIN, and CVV from 3 digit card number
+
+### Check Missing Value
+
+# Check missing Value from all card data
+df_card.isna().sum()
+
+# remove missing value from credit limit
+df_card.dropna(subset=['credit_limit'], inplace=True)
+
+- because the credit limit has been used up and is useless, so I  decide to deleted it.
+- I did not delete the amount of fraud and  not fraud acts because I think it is important to know the number of fraud cases that occur between brands.
+
+# add null or zero in float type in amt_nonfraud_trx_L6M column
+df_card['amt_nonfraud_trx_L6M'].fillna(0, inplace=True)
+
+# add null or zero in int type in count_fraud_trx_L6M column
+df_card['count_fraud_trx_L6M'].fillna(0, inplace=True)
+
+# add null or zero in float type in amt_fraud_trx_L6M column
+df_card['amt_fraud_trx_L6M'].fillna(0, inplace=True)
+
+# add null or zero in int type in count_nonfraud_trx_L6M column
+df_card['count_nonfraud_trx_L6M'].fillna(0, inplace=True)
+df_card
+
+Add missing values ​​that are <NaN> to Null in the following columns:
+- count_nonfraud_trx_L6M
+- amt_nonfraud_trx_L6M
+- count_fraud_trx_L6M
+- amt_fraud_trx_L6M
+
+### Check Duplicate
+
+# check data duplicate from card data from client id
+df_card[df_card.duplicated(subset=['client_id'])]
+
+nothing is deleted from the duplicate "client_id" data because one user can use multiple accounts
+
+### Clean Card Data
+
+# make a copy card data
+df_card_clean = df_card.copy()
+df_card.info()
+
+all data is clean
+
+## User Data
+
+# make a copy user data set original
+df_user_copy = df_user.copy()
+
+### Check Data Type
+
+# check data type for User df
+df_user.info()
+
+found some errors in data type and need to fix it
+
+# convert data type id from interger to string
+df_user['id'] = df_user['id'].astype(str)
+
+# convert data type birthdate from string to datetime
+df_user['birthdate'] = pd.to_datetime(df_user['birthdate'], format='%Y-%m-%d')
+
+# convert data type per_capita_income, yearly_income, total_debt from string to float
+money_columns = ['per_capita_income', 'yearly_income', 'total_debt']
+for col in money_columns:
+    if col in df_user.columns:
+        df_user[col] = df_user[col].astype(str).str.replace('Rp', '', regex=False).str.replace('.', '', regex=False).astype(float)
+
+# check data type for User df
+df_user.info()
+
+- convert ID to String
+- convert Birth Date to Date Series
+- convert Money Column to Float
+
+### Age of User Data
+
+# add age of user data from birthdate
+today = pd.to_datetime('today')
+df_user['age'] = today.year - df_user['birthdate'].dt.year
+# Adjust age for cases where birthday hasn't occurred yet this year
+df_user['age'] = np.where(today.month < df_user['birthdate'].dt.month,
+                          df_user['age'] - 1,
+                          np.where((today.month == df_user['birthdate'].dt.month) & (today.day < df_user['birthdate'].dt.day),
+                                   df_user['age'] - 1,
+                                   df_user['age']))
+df_user['age']
+
+df_user.info()
+
+df_user.head()
+
+age has been added in the new column
+
+### Retired Flag
+
+# if the age >= retirement_age is Retired
+df_user['retired_flag'] = np.where(df_user['age'] >= df_user['retirement_age'], 'Retired', 'Not_Retired')
+df_user['retired_flag']
+
+df_user.head()
+
+retired flag column just added
+
+### DTI (debt-to-income ratio)
+
+# add DTI column from ration between total debt and yearly income
+df_user['dti'] = df_user['total_debt'] / df_user['yearly_income']
+df_user['dti']
+
+df_user.head()
+
+DTI has been added to new column
+
+##Merge Dataset
+
+# merge dataset Card and User clean
+df_merged = pd.merge(df_card_clean, df_user, left_on='client_id', right_on='id', how='left')
+df_merged.info()
+
+df_merged.head()
+
+successfully merged the dataset user and card
+
+#**MILESTONE 2**
+
+##D) EDA
+
+# make a copy for EDA from merged dataset
+df_eda = df_merged.copy()
+df_eda.head()
+
+df_eda.info()
+
+###Descriptive Statistics
+
+ Business Questions
+ - Calculate the total net profit from all transactions in the last 6 months
+ - calculate the fraud rate of RevoBank. Do u think the rate of fraud is still considered safe to RevoBank?
+ - Is there any difference in transaction behaviour per card brand?
+ - Compare the debt to income rations of retired vs non-retired users. Are retired users riskier?
+
+####Numerical Variable
+
+# select only numerical columns
+numerical = df_eda.select_dtypes(include=['int64', 'float64']).columns.tolist()
+numerical
+
+# describe the numerical columns to get basic statistics
+desc_num = df_eda[numerical].describe()
+
+# calculate additional statistics (kurtosis, skewness, variance) for numerical columns
+desc_num.loc['kurtosis'] = df_eda[numerical].kurtosis()
+desc_num.loc['skewness'] = df_eda[numerical].skew()
+desc_num.loc['variance'] = df_eda[numerical].var()
+
+# display the full description with additional statistics
+desc_num.round(2)
+
+# exlude card_number from numerical column
+numerical = numerical.drop('card_number')
+df_eda[numerical].describe()
+
+insight:
+- This indicates that heavy users dominate transaction volume and value. A small percentage of users contribute significantly to revenue.
+- Fraud does not occur often, but when it does occur, the value is large, so it has a direct impact on profits.
+- The user base is financially heterogeneous, requiring segmentation (low–mid–high income) for risk & pricing strategy.
+- The majority of users are in the good credit category, so fraud likely comes not only from high-risk users, but also from account compromise.
+- Many users are inactive, while a small portion is very active → churn analysis & reactivation campaign opportunities.
+
+####String Variable
+
+# Select only object columns
+categorical = df_eda.select_dtypes(include=['object']).columns.tolist()
+categorical
+
+# get the description of the categorical columns
+categorical_describe = df_eda[categorical].describe()
+categorical_describe
+
+Insights:
+- confirm that a client can have more than one account card
+- Mastercard dominates (2,819 cards ≈ 50%)
+- Relatively Balanced Gender Distribution, Female = 2,865 (≈51%), Male ≈ 49%
+- Majority of Users Not Yet Retired = 4,444 (≈80%)
+
+####Date Variable
+
+# Select all datetime columns
+date = df_eda.select_dtypes(include=['datetime64']).columns.tolist()
+date
+
+# Get the description of the date columns
+date_describe = df_eda[date].describe()
+date_describe
+
+Insight:
+- the date starts from 2016-09-01 to 2031-12-01
+
+##Answering Business Questions
+
+###Total Net Profit
+
+*Total Net Profit from last 6 months*
+
+# Define the MDR fee rate
+mdr_fee_rate = 0.015 # 1.5%
+
+# Calculate total non-fraudulent transaction amount (total sales amount)
+total_sales_amount = df_eda['amt_nonfraud_trx_L6M'].sum()
+
+# Calculate total fraudulent transaction amount
+total_fraud_amount = df_eda['amt_fraud_trx_L6M'].sum()
+
+# Calculate MDR fee profit
+mdr_fee_profit = mdr_fee_rate * total_sales_amount
+
+# Calculate total net profit
+total_net_profit = mdr_fee_profit - total_fraud_amount
+
+print(f"Total Sales Amount (last 6 months): Rp{total_sales_amount:,.2f}")
+print(f"Total Fraud Amount (last 6 months): Rp{total_fraud_amount:,.2f}")
+print(f"MDR Fee Profit (1.5% of sales): Rp{mdr_fee_profit:,.2f}")
+print(f"Total Net Profit (last 6 months): Rp{total_net_profit:,.2f}")
+
+Insight:
+- The data shows that the business remains HEALTHY and PROFITABLE.
+- Fraud has not yet threatened profitability, but it is an area with the highest ROI for optimization.
+- Any reduction in fraud directly improves the bottom line without the need for aggressive increases in MDR or volume.
+
+###Fraud Rate
+
+*Calculate the fraud rate of RevoBank. Do u think the fraud rate is still considered safe to RevoBank?*
+
+# Calculate total all transaction amounts
+total_all_amounts = total_sales_amount + total_fraud_amount
+
+# Calculate fraud rate
+fraud_rate = (total_fraud_amount / total_all_amounts) * 100
+
+# Calculate non-fraud rate
+non_fraud_rate = (total_sales_amount / total_all_amounts) * 100
+
+print(f"Total All Transaction Amounts (last 6 months): Rp{total_all_amounts:,.2f}")
+print(f"Fraud Rate: {fraud_rate:.4f}%")
+print(f"Non-Fraud Rate: {non_fraud_rate:.4f}%")
+
+# Prepare data for pie chart
+labels = ['Fraudulent Transactions', 'Non-Fraudulent Transactions']
+sizes = [total_fraud_amount, total_sales_amount]
+colors = ['#ff9999','#66b3ff']
+explode = (0.1, 0)  # Explode the 'Fraudulent Transactions' slice
+
+# Create the pie chart
+plt.figure(figsize=(8, 8))
+plt.pie(sizes, explode=explode, labels=labels, colors=colors, autopct='%1.4f%%',
+        shadow=True, startangle=140)
+plt.axis('equal')  # Equal aspect ratio ensures that pie is drawn as a circle.
+plt.title('Proportion of Fraudulent vs. Non-Fraudulent Transactions (Last 6 Months)')
+plt.show()
+
+# Assess safety
+if fraud_rate < 1:
+    safety_assessment = "considered relatively safe, but continuous monitoring and mitigation are crucial."
+elif fraud_rate >= 1 and fraud_rate < 5:
+    safety_assessment = "a moderate concern, and efforts should be intensified to reduce it."
+else:
+    safety_assessment = "a significant concern, requiring urgent and aggressive fraud prevention measures."
+
+print(f"\nBased on the fraud rate of {fraud_rate:.4f}%, RevoBank's fraud rate is {safety_assessment}")
+
+Insight:
+- the fraud rate of 0.2208%, RevoBank's fraud rate is considered relatively safe, but continuous monitoring and mitigation are crucial.
+
+### Transaction Behaviour
+
+*Is there any difference in transaction behaviour per card brand?*
+
+# Group by card_brand and calculate the average of transaction count and amount
+transaction_behavior_by_brand = df_eda.groupby('card_brand').agg(
+    avg_nonfraud_count=('count_nonfraud_trx_L6M', 'mean'),
+    avg_nonfraud_amount=('amt_nonfraud_trx_L6M', 'mean')
+).reset_index()
+
+print("Average Transaction Count and Amount per Card Brand:")
+print(transaction_behavior_by_brand)
+
+# Visualize average non-fraudulent transaction count per card brand
+plt.figure(figsize=(10, 6))
+sns.barplot(x='card_brand', y='avg_nonfraud_count', data=transaction_behavior_by_brand, palette='viridis')
+plt.title('Average Non-Fraudulent Transaction Count per Card Brand (Last 6 Months)')
+plt.xlabel('Card Brand')
+plt.ylabel('Average Transaction Count')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# Visualize average non-fraudulent transaction amount per card brand
+plt.figure(figsize=(10, 6))
+sns.barplot(x='card_brand', y='avg_nonfraud_amount', data=transaction_behavior_by_brand, palette='plasma')
+plt.title('Average Non-Fraudulent Transaction Amount per Card Brand (Last 6 Months)')
+plt.xlabel('Card Brand')
+plt.ylabel('Average Transaction Amount (Rp)')
+plt.ticklabel_format(style='plain', axis='y') # Prevent scientific notation on y-axis
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+Insight:
+- MasterCard is the highest-performing card brand among other brands in terms of transaction count.
+- While Amex is the highest-performing card brand among other brands in terms of transaction amount (Rp).
+- JCB is the Lowest-performing card brand among other brands, in terms of transaction count and amount.
+- Visa is the middle-performing card brand among other brands, in terms of transaction count and amount.
+
+
+###Debt-to-income ratios
+
+*Compare the debt-to-income ratios of retired vs non-retired users? Are retired users riskiers?*
+
+# Group by 'retired_flag' and calculate aggregate statistics for 'dti'
+dti_by_retired_status = df_eda.groupby('retired_flag')['dti'].agg(['mean', 'median', 'std', 'min', 'max']).round(2)
+
+print("Debt-to-Income Ratio Statistics by Retirement Status:")
+print(dti_by_retired_status)
+
+# Create boxplots to visualize the DTI distribution for retired vs. non-retired users
+plt.figure(figsize=(10, 6))
+sns.boxplot(x='retired_flag', y='dti', data=df_eda, palette='coolwarm')
+plt.title('Debt-to-Income Ratio by Retirement Status')
+plt.xlabel('Retirement Status')
+plt.ylabel('Debt-to-Income Ratio (DTI)')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# Assess risk based on DTI
+# A common threshold for 'high' DTI is often cited around 0.36 or higher.
+# Let's consider retired users 'riskier' if their average DTI is significantly higher
+# or their distribution shows a higher concentration of high DTIs.
+
+mean_dti_retired = dti_by_retired_status.loc['Retired', 'mean']
+mean_dti_not_retired = dti_by_retired_status.loc['Not_Retired', 'mean']
+
+if mean_dti_retired > mean_dti_not_retired:
+    risk_assessment = f"On average, retired users have a slightly higher DTI ({mean_dti_retired:.2f}) compared to non-retired users ({mean_dti_not_retired:.2f}). Looking at the boxplot will give a better visual insight into their distributions and potential risk."
+elif mean_dti_retired < mean_dti_not_retired:
+    risk_assessment = f"On average, non-retired users have a slightly higher DTI ({mean_dti_not_retired:.2f}) compared to retired users ({mean_dti_retired:.2f}). Looking at the boxplot will give a better visual insight into their distributions and potential risk."
+else:
+    risk_assessment = f"Both groups have a similar average DTI of {mean_dti_retired:.2f}. The boxplot will clarify the overall distribution and potential risk."
+
+print(f"\nRisk Assessment: {risk_assessment}")
+
+Insight:
+- The higher the DTI → the greater the debt burden compared to income → higher credit risk.
+- Not_Retired Users Have Significantly Higher DTI: Median DTI Not_Retired ≈ 0.28–0.30; Median DTI Retired ≈ 0.03–0.05
+- Risk Variability Is Much Greater in Not_Retired
+- Retired Users Are More Financially Stable, as seen from DTI approaching zero
+
+so, retired users are not a risky segment. In fact, they exhibit the most stable financial profiles with low debt burdens. The greatest credit risk comes from Not_Retired users with high DTIs, not from retirement status itself.
+
+###Average of DTI
+
+*Does the DTI align with credit score? does higher DTI give higher transactions to RevoBank? is that riskier?*
+
+# categorize credit score
+bins = [0, 580, 650, 750, 800, 850]
+labels = ['Poor', 'Fair', 'Good', 'Very Good', 'Exceptional']
+
+df_eda['credit_score_category'] = pd.cut(df_eda['credit_score'], bins=bins, labels=labels, right=True)
+df_eda.head()
+
+**Reasoning**:
+Now that the credit scores are categorized, I need to calculate the average DTI, non-fraudulent transaction count, and non-fraudulent transaction amount for each credit score category to understand their relationship. After that, I will visualize them using bar plots.
+
+
+
+credit_score_summary = df_eda.groupby('credit_score_category').agg(
+    avg_dti=('dti', 'mean'),
+    avg_nonfraud_trx_count=('count_nonfraud_trx_L6M', 'mean'),
+    avg_nonfraud_trx_amount=('amt_nonfraud_trx_L6M', 'mean')
+).reset_index()
+
+print("Average DTI, Non-Fraudulent Transaction Count, and Amount by Credit Score Category:")
+print(credit_score_summary)
+
+# Plotting Average DTI by Credit Score Category
+plt.figure(figsize=(10, 6))
+sns.barplot(x='credit_score_category', y='avg_dti', data=credit_score_summary, palette='viridis')
+plt.title('Average Debt-to-Income Ratio by Credit Score Category')
+plt.xlabel('Credit Score Category')
+plt.ylabel('Average DTI')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# Plotting Average Non-Fraudulent Transaction Count by Credit Score Category
+plt.figure(figsize=(10, 6))
+sns.barplot(x='credit_score_category', y='avg_nonfraud_trx_count', data=credit_score_summary, palette='magma')
+plt.title('Average Non-Fraudulent Transaction Count by Credit Score Category')
+plt.xlabel('Credit Score Category')
+plt.ylabel('Average Non-Fraudulent Transaction Count')
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+# Plotting Average Non-Fraudulent Transaction Amount by Credit Score Category
+plt.figure(figsize=(10, 6))
+sns.barplot(x='credit_score_category', y='avg_nonfraud_trx_amount', data=credit_score_summary, palette='cividis')
+plt.title('Average Non-Fraudulent Transaction Amount by Credit Score Category')
+plt.xlabel('Credit Score Category')
+plt.ylabel('Average Non-Fraudulent Transaction Amount (Rp)')
+plt.ticklabel_format(style='plain', axis='y') # Prevent scientific notation on y-axis
+plt.grid(axis='y', linestyle='--', alpha=0.7)
+plt.show()
+
+Insight:
+- DTI align with credit score, The DTI consistently decreased from Poor (0.27) to Exceptional (0.22). This means that the better the credit score, the healthier the debt-to-income structure.
+- High transactions at high DTI are not due to strong purchasing power, but rather dependence on debt.
+- Relatively higher risk. High DTI + Low Credit Score → high financial stress. Potential: default, fraud, long-term decline in profits
+
+###Recommendation
+
+*Is there a relationship between user age and credit limit?*
+
+
+# Group by age and calculate the average credit limit
+avg_credit_limit_by_age = df_eda.groupby('age')['credit_limit'].mean().reset_index()
+
+# Filter out ages that might be outliers or have very few data points, for better visualization
+# Let's consider a reasonable age cap, e.g., 90 years old, based on typical credit card user demographics.
+filtered_credit_limit_by_age = avg_credit_limit_by_age[avg_credit_limit_by_age['age'] <= 90]
+
+# Create a line plot
+plt.figure(figsize=(12, 6))
+sns.lineplot(x='age', y='credit_limit', data=filtered_credit_limit_by_age, marker='o', color='blue')
+plt.title('Average Credit Limit by User Age (Up to 90 years)')
+plt.xlabel('User Age')
+plt.ylabel('Average Credit Limit (Rp)')
+plt.grid(True, linestyle='--', alpha=0.6)
+plt.ticklabel_format(style='plain', axis='y') # Prevent scientific notation on y-axis
+plt.show()
+
+
+Insight
+- Ages 25–45
+Credit limits are relatively stable and moderate → productive phase with active income.
+
+- Ages 50–65
+Average credit limit increases are observed → asset accumulation, mature credit history, and more measurable risk.
+
+- Ages >70
+High variability (extreme spikes and drops) → data sparsity and potential risk exceptions/legacy users.
+
+- No consistent upward trend with age → age is not the primary driver of limit determination.
+
+Recommendation:
+- 25–45 years old (Growth Segment)
+Credit usage education,
+Behavior-based limit increase,
+Cashback & installment program
+
+- 50–65 years old (Prime Segment)
+Higher limit with DTI control,
+Loyalty & premium card upsell
+
+- =>70 years old (Risk-Sensitive Segment)
+Periodic limit review,
+Stricter fraud monitoring,
+Prefer transaction cap over limit increase
+
+##MILESTONE 3 ##
+
+## Data Preparation ##
+
+# make a copy of df_merge
+df_model = df_merged.copy()
+df_model.head()
+
+df_model.info()
+
+### Business Questions
+
+- Apply clustering, choose one between K-means or RFM, and reason.
+- Identify segments which have a higher transaction amount, higher transaction count, credit limit, DTI, ETC.
+- Identify Business opportunities
+- Business recommendation for Performance Management Lead.
+
+### Libraries ###
+
+# Cluster
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import silhouette_score
+import plotly.express as px
+
+## Answering Business Question
+
+# check all numerical feature
+df_model.select_dtypes(include=['int64', 'float64']).info()
+
+### RFM variables
+
+# use column (days_since_last_trx, count_nonfraud_trx_L6M, amt_nonfraud_trx_L6M) for RFM before enter the segmentation section
+df_model[['id_x', 'days_since_last_trx', 'count_nonfraud_trx_L6M', 'amt_nonfraud_trx_L6M']]
+
+rfm = df_model[['id_x', 'days_since_last_trx', 'count_nonfraud_trx_L6M', 'amt_nonfraud_trx_L6M']].copy()
+rfm.head()
+
+- Recency = days_since_last_trx
+- Frequency = count_nonfraud_trx_L6M
+- Monetary = amt_nonfraud_trx_L6M
+
+Reason:
+- Frequency = count_nonfraud_trx_L6M (and not combined with fraud transactions), because Frequency should represent healthy and valid transaction behavior, not problematic activity.
+- Monetary = amt_nonfraud_trx_L6M (excluding fraud amounts), because Monetary must reflect realized financial value, not raw transaction amounts.
+- Monetary does NOT use yearly income or per capita income, because Income metrics are suitable for customer profiling, not for Monetary value in RFM.
+
+# rename columns id_x as id, days_since_last_trx as recency, count_nonfraud_trx_L6M as frequency, amt_nonfraud_trx_L6M as monetary
+rfm.rename(columns={'id_x': 'id', 'days_since_last_trx': 'recency', 'count_nonfraud_trx_L6M': 'frequency', 'amt_nonfraud_trx_L6M': 'monetary'}, inplace=True)
+rfm.head()
+
+!pip install plotly
+
+# create 3d scatter plot
+fig = px.scatter_3d(
+    rfm,
+    x='recency',
+    y='frequency',
+    z='monetary',
+    title='RFM plot',
+    size_max=10
+)
+fig.show()
+
+### Segmentation
+
+#### Recency
+
+# recency in qcut
+pd.qcut(rfm['recency'], q=5, duplicates='drop')
+
+pd.qcut(rfm['recency'], q=5, duplicates='drop').value_counts()
+
+#### Frequency
+
+pd.qcut(rfm['frequency'], q=5, duplicates='drop')
+
+pd.qcut(rfm['frequency'], q=5, duplicates='drop').value_counts()
+
+#### Monetary
+
+pd.qcut(rfm['monetary'], q=5).value_counts()
+
+#### Scoring R-F-M
+
+# Categories created (recency)
+pd.qcut(rfm['recency'], q=5, duplicates='drop').cat.categories
+
+Recency
+- 0-10: 5 (the best)
+- 10-19: 4
+- 19-29: 3
+- 20-604: 2 (the worst)
+
+semakin dekat masa transaksinya semakin bagus
+
+# Categories created (frequency)
+pd.qcut(rfm['frequency'], q=5, duplicates='drop').cat.categories
+
+Frequency
+- 0-35: 2 (the worst)
+- 35-112: 3
+- 112-202: 4
+- 202-1691: 5 (the best)
+
+semakin banyak penggunaan semakin bagus
+
+# Categories created (monetary)
+pd.qcut(rfm['monetary'], q=5).cat.categories
+
+Monetary
+- -8462200.001 - 0.0: 1 (the worst)
+- 0.0 - 18830280.0: 2
+- 18830280.0 - 67961160.0: 3
+- 67961160.0 - 139225440.0: 4
+- 139225440.0 - 1553045500.0: 5 (the best)
+
+semakin banyak jumlah uang yang digunakan semakin bagus
+
+# Re-initialize rfm with the original columns from df_model to ensure 'recency', 'frequency', 'monetary' are present
+rfm = df_model[['id_x', 'days_since_last_trx', 'count_nonfraud_trx_L6M', 'amt_nonfraud_trx_L6M']].copy()
+rfm.rename(columns={'id_x': 'id', 'days_since_last_trx': 'recency', 'count_nonfraud_trx_L6M': 'frequency', 'amt_nonfraud_trx_L6M': 'monetary'}, inplace=True)
+
+# Scoring RFM and apply to all columns
+rfm['r_score'] = pd.qcut(rfm['recency'], q=5, duplicates='drop', labels=[5,4,3,2])
+rfm['f_score'] = pd.qcut(rfm['frequency'], q=5, duplicates='drop', labels=[2,3,4,5])
+rfm['m_score'] = pd.qcut(rfm['monetary'], q=5, duplicates='drop', labels=[1,2,3,4,5])
+rfm
+
+# combine all scores. data cut/qcut output categorical dtype, so must be changed to str
+rfm['rfm_score'] = rfm['r_score'].astype(str) + rfm['f_score'].astype(str) + rfm['m_score'].astype(str)
+rfm
+
+rfm['rfm_score'].value_counts()
+
+### Interpreting RFM Segments
+
+GSHEET_URL = 'https://docs.google.com/spreadsheets/d/1xbxOTeE6ihnp6iBA_yz1mJimR-z2sAEDQNkQ4crh92E/edit?gid=884117664#gid=884117664'
+GSHEET_URL_CSV = GSHEET_URL.replace('/edit?gid=', '/export?format=csv&gid=')
+rfm_segments = pd.read_csv(GSHEET_URL_CSV)
+
+# Ubah score menjadi string agar bisa dicombine dengan data kita
+rfm_segments['rfm_score'] = rfm_segments['rfm_score'].astype(str)
+rfm_segments
+
+#### Merge Data
+
+rfm_final = rfm.merge(rfm_segments, on='rfm_score', how='left')
+rfm_final
+
+#### Segments Group
+
+# count of segments group
+rfm_final['segment'].value_counts()
+
+rfm_final['Actionable'].value_counts()
+
+### Identify Segments
+
+rfm_final.groupby(['segment'])[['recency', 'frequency', 'monetary']].mean()
+
+Insight:
+- The most attractive segments are Champions, Loyal Customers, and Potential Loyalists because they combine strong transaction behavior with high probability of incremental revenue at the lowest marginal cost.
+- the most unattractive segments are at risk, hibernating, promising, recent customer, and about to sleep, because not a top priority when viewed from RevoBank's current business objectives: increasing transactions and profits in the short-medium term.
+
+### Identify Business Oppotunities
+
+segment_summary = rfm_final.groupby(['segment', 'Actionable']).agg(
+    count_of_customers=('id', 'count'),
+    mean_monetary=('monetary', 'mean')
+).reset_index()
+
+print("Customer Segment Summary (Segment, Actionable, Count, Mean Monetary):")
+display(segment_summary)
+
+Insight:
+- In the segment (about to sleep), many customers have a fairly negative average usage, so you have to share valuable resources, recommend popular products / renewals at discounts, and reconnect with them.
+- In the segment (recent customers) with the highest average usage of money, Revobank must be able to maintain and increase usage by providing on-boarding support, giving them early success, and starting to build relationships.
+- The segment (customers needing attention) has a fairly large number of customers, so companies need to make limited-time offers, make recommendations based on past purchases, and reactivate them.
+
+### Business Recommendation
+
+# merge all column
+rfm_complete = rfm_final[['id', 'segment', 'Activity', 'Actionable']].merge(df_model, left_on='id', right_on='id_x', how='left')
+rfm_complete
+
+###Recommendation:
+- Focus resources on Champions, Loyal Customers, and Potential Loyalists as core growth segments, with a usage-driven, low-risk, and profit-oriented approach, while maintaining At Risk through targeted retention, not mass campaigns.
